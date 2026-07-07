@@ -86,6 +86,55 @@ function resultToText(meeting) {
   ].join("\n\n");
 }
 
+function meetingToMarkdown(meeting) {
+  if (!meeting?.result) return "";
+
+  const { input, result } = meeting;
+
+  const lines = [
+    `# 会議ログ: ${input.theme || result.agenda}`,
+    "",
+    `- 日時: ${formatDate(meeting.createdAt)}`,
+    `- モード: ${meeting.mode === "demo" ? "デモ応答" : "AI生成"}`,
+    "",
+    "## 入力内容",
+    ...Object.entries(fieldLabels).map(([key, label]) => `- ${label}: ${input[key] || "（未入力）"}`),
+    "",
+    "## 議題",
+    result.agenda,
+    "",
+    "## 各人格の意見",
+    ...opinionCards.flatMap((card) => [`### ${card.name}（${card.role}）`, result.opinions[card.key], ""]),
+    "## 意見の対立点",
+    result.conflicts,
+    "",
+    "## 議長masakoの結論",
+    result.decision,
+    "",
+    "## 今日やること",
+    ...result.todayTasks.map((item) => `- ${item}`),
+    "",
+    "## 後回しにすること",
+    ...result.laterTasks.map((item) => `- ${item}`),
+    "",
+    "## 30分単位の作業手順",
+    ...result.timeline.map((item) => `- ${item}`),
+    "",
+    "## ポートフォリオ化するなら",
+    result.portfolioPoint
+  ];
+
+  return lines.join("\n");
+}
+
+function markdownFilename(meeting) {
+  const date = new Date(meeting?.createdAt || Date.now());
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `meeting-log-${y}${m}${d}.md`;
+}
+
 export default function Home() {
   const [input, setInput] = useState(emptyInput);
   const [meetings, setMeetings] = useState([]);
@@ -93,6 +142,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [copyLabel, setCopyLabel] = useState("コピー");
+  const [markdownOutput, setMarkdownOutput] = useState("");
+  const [markdownCopyLabel, setMarkdownCopyLabel] = useState("コピー");
 
   const canSubmit = useMemo(() => {
     return input.theme.trim() && input.problem.trim() && !loading;
@@ -116,6 +167,11 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem("masako-meetings", JSON.stringify(meetings));
   }, [meetings]);
+
+  useEffect(() => {
+    setMarkdownOutput("");
+    setMarkdownCopyLabel("コピー");
+  }, [activeMeeting]);
 
   function updateField(key, value) {
     setInput((current) => ({ ...current, [key]: value }));
@@ -166,6 +222,34 @@ export default function Home() {
     await navigator.clipboard.writeText(resultToText(activeMeeting));
     setCopyLabel("コピー済み");
     window.setTimeout(() => setCopyLabel("コピー"), 1800);
+  }
+
+  function generateMarkdown() {
+    if (!activeMeeting) return;
+    setMarkdownOutput(meetingToMarkdown(activeMeeting));
+    setMarkdownCopyLabel("コピー");
+  }
+
+  async function copyMarkdown() {
+    if (!markdownOutput) return;
+
+    await navigator.clipboard.writeText(markdownOutput);
+    setMarkdownCopyLabel("コピー済み");
+    window.setTimeout(() => setMarkdownCopyLabel("コピー"), 1800);
+  }
+
+  function downloadMarkdown() {
+    if (!markdownOutput || !activeMeeting) return;
+
+    const blob = new Blob([markdownOutput], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = markdownFilename(activeMeeting);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   function clearForm() {
@@ -290,7 +374,16 @@ export default function Home() {
 
         <section className="min-w-0">
           {activeMeeting ? (
-            <MeetingResult meeting={activeMeeting} copyLabel={copyLabel} onCopy={copyResult} />
+            <MeetingResult
+              meeting={activeMeeting}
+              copyLabel={copyLabel}
+              onCopy={copyResult}
+              markdownOutput={markdownOutput}
+              markdownCopyLabel={markdownCopyLabel}
+              onGenerateMarkdown={generateMarkdown}
+              onCopyMarkdown={copyMarkdown}
+              onDownloadMarkdown={downloadMarkdown}
+            />
           ) : (
             <EmptyState />
           )}
@@ -313,7 +406,16 @@ function placeholderFor(key) {
   return placeholders[key];
 }
 
-function MeetingResult({ meeting, copyLabel, onCopy }) {
+function MeetingResult({
+  meeting,
+  copyLabel,
+  onCopy,
+  markdownOutput,
+  markdownCopyLabel,
+  onGenerateMarkdown,
+  onCopyMarkdown,
+  onDownloadMarkdown
+}) {
   const result = meeting.result;
 
   return (
@@ -367,6 +469,50 @@ function MeetingResult({ meeting, copyLabel, onCopy }) {
         <ListPanel title="今日やること" items={result.todayTasks} />
         <ListPanel title="後回しにすること" items={result.laterTasks} />
         <ListPanel title="30分単位の作業手順" items={result.timeline} />
+      </div>
+
+      <div className="rounded-lg border border-[#d8cfc2] bg-[#fffdf8] p-5 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <h3 className="text-lg font-bold text-[#292521]">Markdown出力</h3>
+          <button
+            type="button"
+            onClick={onGenerateMarkdown}
+            className="rounded-md bg-[#292521] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#3b352f]"
+          >
+            Markdown出力
+          </button>
+        </div>
+
+        {markdownOutput ? (
+          <div className="mt-4 space-y-3">
+            <textarea
+              readOnly
+              value={markdownOutput}
+              rows={16}
+              className="w-full rounded-md border border-[#d8cfc2] bg-white px-3 py-3 font-mono text-xs leading-6 text-[#292521] outline-none focus:border-[#74836b] focus:ring-2 focus:ring-[#74836b]/20"
+            />
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={onCopyMarkdown}
+                className="rounded-md border border-[#d8cfc2] px-4 py-3 text-sm font-bold text-[#5f574f] transition hover:bg-[#f0e8dc]"
+              >
+                {markdownCopyLabel}
+              </button>
+              <button
+                type="button"
+                onClick={onDownloadMarkdown}
+                className="rounded-md border border-[#d8cfc2] px-4 py-3 text-sm font-bold text-[#5f574f] transition hover:bg-[#f0e8dc]"
+              >
+                .mdでダウンロード
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm leading-6 text-[#746b61]">
+            「Markdown出力」を押すと、この会議結果をMarkdown形式に整形して表示します。
+          </p>
+        )}
       </div>
     </div>
   );
